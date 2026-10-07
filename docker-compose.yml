@@ -1,0 +1,22 @@
+services:
+
+  streamlit:
+    build: .
+    container_name: calculator-app
+    ports:
+      - "8501:8501"
+    environment:
+      MONGO_URI: mongodb://mongodb:27017/
+    depends_on:
+      - mongodb
+
+  mongodb:
+    image: mongo:7
+    container_name: calculator-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+
+volumes:
+  mongodb_data:
