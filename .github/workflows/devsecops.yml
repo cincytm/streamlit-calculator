@@ -1,0 +1,151 @@
+name: DevSecOps Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+
+  # ==========================================
+  # 1. KICS - IaC Security Scan
+  # ==========================================
+  kics:
+    name: KICS IaC Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Run KICS scan
+        uses: Checkmarx/kics-github-action@v2.1.0
+        with:
+          path: .
+          output_path: kics-results
+          output_formats: json,sarif
+          fail_on: high
+          exclude_paths: .git,.github
+
+
+  # ==========================================
+  # 2. Trivy - Filesystem Security Scan
+  # ==========================================
+  trivy-fs:
+    name: Trivy Filesystem Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-fs-results.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      - name: Upload Trivy filesystem results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-fs-results.sarif
+
+
+  # ==========================================
+  # 3. SonarCloud Code Quality/Security
+  # ==========================================
+  sonar:
+    name: SonarCloud Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+  # ==========================================
+  # 4. Docker Image Build
+  # ==========================================
+  docker-build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+
+    needs:
+      - kics
+      - trivy-fs
+      - sonar
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t streamlit-calculator:${{ github.sha }} \
+            .
+
+
+  # ==========================================
+  # 5. Trivy Docker Image Scan
+  # ==========================================
+  trivy-image:
+    name: Trivy Docker Image Scan
+    runs-on: ubuntu-latest
+
+    needs: docker-build
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t streamlit-calculator:${{ github.sha }} \
+            .
+
+      - name: Scan Docker image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: streamlit-calculator:${{ github.sha }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      - name: Generate SARIF report
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: streamlit-calculator:${{ github.sha }}
+          format: sarif
+          output: trivy-image-results.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      - name: Upload Trivy image results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-image-results.sarif
